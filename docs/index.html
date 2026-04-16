@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Урок 1 — справка по Kubernetes</title>
+    <title>Урок 1 — справка по Kubernetes (kind)</title>
     <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
@@ -18,6 +18,7 @@
         <a href="#kubectl">kubectl</a>
         <a href="#kind">kind</a>
         <a href="#deploy">Деплой сервиса</a>
+        <a href="#auth">Authentication</a>
         <a href="#debug">Диагностика</a>
       </nav>
     </header>
@@ -120,6 +121,15 @@ kubectl get deploy
 kubectl get svc
 kubectl get events --sort-by=.metadata.creationTimestamp</code></pre>
 
+        <h3>Контекст (куда “смотрит” kubectl)</h3>
+        <p class="hint">
+          Если у тебя есть и <code>docker-desktop</code>, и <code>kind</code>,
+          легко случайно деплоить “не туда”. Всегда проверяй текущий контекст.
+        </p>
+        <pre><code>kubectl config current-context
+kubectl config get-contexts
+kubectl config use-context kind-kind</code></pre>
+
         <h3>Диагностика</h3>
         <pre><code>kubectl describe pod &lt;pod-name&gt;
 kubectl logs -f &lt;pod-name&gt;
@@ -148,8 +158,9 @@ kubectl cluster-info</code></pre>
           В kind ноды — это отдельный Docker‑контекст. Поэтому образ, собранный
           локально, нужно “загрузить” в кластер.
         </p>
-        <pre><code>docker build -t player-api:latest .
-kind load docker-image player-api:latest --name kind</code></pre>
+        <pre><code>export TAG="v1.1.1"
+docker build -t player-api:$TAG .
+kind load docker-image player-api:$TAG --name kind</code></pre>
       </section>
 
       <section id="deploy" class="card">
@@ -161,25 +172,71 @@ kind load docker-image player-api:latest --name kind</code></pre>
 
         <h3>Шаги</h3>
         <ol>
-          <li>Собрать образ <code>player-api:latest</code>.</li>
+          <li>Собрать образ <code>player-api:&lt;tag&gt;</code> (лучше не <code>latest</code>).</li>
           <li>Загрузить образ в kind.</li>
           <li>Применить манифесты.</li>
           <li>Пробросить порт и проверить <code>/health</code>.</li>
         </ol>
 
-        <pre><code># 1) build
-docker build -t player-api:latest .
+        <pre><code>export TAG="v1.1.1"
+
+# 1) build
+docker build -t player-api:$TAG .
 
 # 2) load into kind
-kind load docker-image player-api:latest --name kind
+kind load docker-image player-api:$TAG --name kind
 
-# 3) apply
-kubectl apply -f k8s/deployment.yaml
-kubectl apply -f k8s/service.yaml
+# 3) apply (один раз) + update image (каждый релиз)
+kubectl config use-context kind-kind
+kubectl apply -f k8s/deployment.yaml -f k8s/service.yaml
+kubectl set image deployment/player-api player-api=player-api:$TAG
+kubectl rollout status deployment/player-api
 
 # 4) test
 kubectl port-forward svc/player-api 8000:80
 curl http://127.0.0.1:8000/health</code></pre>
+
+        <h3>Вариант “по‑правильному”: версии вместо <code>latest</code></h3>
+        <p class="hint">
+          Используй immutable tag (например <code>v1.1.0</code>) и обновляй Deployment на
+          конкретную версию. Это упрощает откаты и делает релизы воспроизводимыми.
+        </p>
+        <pre><code>export TAG="v1.1.1"
+
+docker build -t player-api:$TAG .
+kind load docker-image player-api:$TAG --name kind
+
+kubectl config use-context kind-kind
+kubectl set image deployment/player-api player-api=player-api:$TAG
+kubectl rollout status deployment/player-api</code></pre>
+      </section>
+
+      <section id="auth" class="card">
+        <h2>Authentication (JWT): как пользоваться</h2>
+        <p>
+          В уроке 1.1 добавлена базовая аутентификация: регистрация, логин и
+          Bearer‑токен. Эндпоинты <code>/players</code> требуют заголовок
+          <code>Authorization</code>.
+        </p>
+
+        <h3>1) Зарегистрироваться</h3>
+        <pre><code>curl -X POST http://127.0.0.1:8000/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"username":"player1","email":"player1@example.com","password":"verysecret123"}'</code></pre>
+
+        <h3>2) Получить токен</h3>
+        <p class="hint">
+          Логин использует OAuth2 password flow и принимает
+          <code>application/x-www-form-urlencoded</code>.
+        </p>
+        <pre><code>curl -X POST http://127.0.0.1:8000/auth/token \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "username=player1&password=verysecret123"</code></pre>
+
+        <h3>3) Вызвать защищённый эндпоинт</h3>
+        <pre><code># TOKEN=&lt;access_token из /auth/token&gt;
+curl http://127.0.0.1:8000/players \
+  -H "Authorization: Bearer $TOKEN"</code></pre>
       </section>
 
       <section id="debug" class="card">
@@ -218,6 +275,24 @@ curl http://127.0.0.1:8000/health</code></pre>
           </li>
           <li>
             Проверь endpoints сервиса: <code>kubectl get endpoints player-api</code>
+          </li>
+        </ul>
+
+        <h3>В Swagger не видно эндпоинты (например <code>/auth/*</code>)</h3>
+        <ul>
+          <li>
+            Проверь, что ты смотришь на нужный инстанс: открой
+            <code>/openapi.json</code> и поищи пути:
+            <code>curl -s http://localhost:8000/openapi.json | grep -Eo '\"/auth/[^\\\"]+'</code>
+          </li>
+          <li>
+            Проверь, что выкатил новый образ в кластер (и правильный контекст):
+            <code>kubectl config current-context</code>,
+            <code>kubectl get deploy player-api -o=jsonpath='{.spec.template.spec.containers[*].image}{"\\n"}'</code>
+          </li>
+          <li>
+            Дождись завершения обновления:
+            <code>kubectl rollout status deployment/player-api</code>
           </li>
         </ul>
       </section>

@@ -21,6 +21,33 @@ which uvicorn
 Swagger/OpenAPI:
 `http://localhost:8000/docs`
 
+## Authentication (JWT)
+
+Эндпоинты `/players` требуют Bearer‑токен.
+
+### Регистрация
+
+```bash
+curl -X POST http://localhost:8000/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"username":"player1","email":"player1@example.com","password":"verysecret123"}'
+```
+
+### Логин (получить токен)
+
+```bash
+curl -X POST http://localhost:8000/auth/token \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "username=player1&password=verysecret123"
+```
+
+### Пример запроса к защищённому эндпоинту
+
+```bash
+TOKEN="<access_token>"
+curl http://localhost:8000/players -H "Authorization: Bearer $TOKEN"
+```
+
 ## Настройка БД
 
 По умолчанию используется SQLite в файле `data/app.db`.
@@ -58,7 +85,27 @@ curl -X PUT http://localhost:8000/players/1 \
 
 Нужно собрать Docker-образ и задеплоить его как `Deployment` + `Service`.
 
-### 1) Собрать образ
+### “Правильный” workflow (версии вместо `latest`)
+
+Идея: используем **immutable tag** (например `v1.1.0`) и обновляем `Deployment` на конкретную версию.
+
+Пример для **kind**:
+
+```bash
+export TAG="v1.1.0"
+
+docker build -t player-api:$TAG .
+kind load docker-image player-api:$TAG --name kind
+
+kubectl config use-context kind-kind
+kubectl apply -f k8s/deployment.yaml -f k8s/service.yaml
+
+# Обновить образ в Deployment (роллаут)
+kubectl set image deployment/player-api player-api=player-api:$TAG
+kubectl rollout status deployment/player-api
+```
+
+### 1) Собрать образ (быстрый вариант)
 
 ```bash
 docker build -t player-api:latest .

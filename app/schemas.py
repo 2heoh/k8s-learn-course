@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, EmailStr, Field, ConfigDict
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
 class PlayerBase(BaseModel):
@@ -11,6 +11,10 @@ class PlayerBase(BaseModel):
 
 class PlayerCreate(PlayerBase):
     pass
+
+
+class PlayerRegister(PlayerBase):
+    password: str = Field(min_length=8, max_length=128)
 
 
 class PlayerUpdateFull(PlayerBase):
@@ -36,4 +40,9 @@ class PlayerRead(BaseModel):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
 

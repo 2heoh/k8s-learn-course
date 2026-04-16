@@ -16,13 +16,15 @@ spec:
     spec:
       containers:
         - name: player-api
-          image: player-api:latest
+          image: player-api:v1.1.0
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000
           env:
             - name: DATABASE_URL
               value: "sqlite:///./data/app.db"
+            - name: SECRET_KEY
+              value: "change-me-in-prod"
           readinessProbe:
             httpGet:
               path: /health
