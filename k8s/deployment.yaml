@@ -25,6 +25,8 @@ spec:
               value: "sqlite:///./data/app.db"
             - name: SECRET_KEY
               value: "change-me-in-prod"
+            - name: BOOTSTRAP_ADMIN_KEY
+              value: "change-me"
           readinessProbe:
             httpGet:
               path: /health

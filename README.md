@@ -47,6 +47,35 @@ curl http://127.0.0.1:8000/health
 kubectl get deploy player-api -o=jsonpath='{.spec.template.spec.containers[*].image}{"\n"}'
 ```
 
+## Тесты
+
+### Локальные acceptance tests (in-memory)
+
+```bash
+source .venv/bin/activate
+pip install -r requirements-dev.txt
+pytest -q
+```
+
+### E2E тесты против кластера (http://localhost:8000)
+
+1) Подними доступ к сервису:
+
+```bash
+kubectl config use-context kind-kind
+kubectl port-forward svc/player-api 8000:80
+```
+
+2) Убедись, что в кластере задан `BOOTSTRAP_ADMIN_KEY` (см. `k8s/deployment.yaml`).
+
+3) Запусти тесты:
+
+```bash
+source .venv/bin/activate
+pip install -r requirements-dev.txt
+BASE_URL="http://localhost:8000" BOOTSTRAP_ADMIN_KEY="change-me" pytest -q -m e2e
+```
+
 ## Сервис (пример для курса)
 
 RESTful API для работы с сущностью `Игрок` (CRUD).
@@ -73,6 +102,17 @@ Swagger/OpenAPI:
 ## Authentication (JWT)
 
 Эндпоинты `/players` требуют Bearer‑токен.
+
+### Создать пользователя с ролью admin (bootstrap)
+
+Нужна переменная окружения `BOOTSTRAP_ADMIN_KEY` (в k8s — через Secret/env). Запрос должен содержать заголовок `X-Bootstrap-Key`.
+
+```bash
+curl -X POST http://localhost:8000/auth/register-admin \
+  -H "Content-Type: application/json" \
+  -H "X-Bootstrap-Key: change-me" \
+  -d '{"username":"admin1","email":"admin1@example.com","password":"verysecret123"}'
+```
 
 ### Регистрация
 

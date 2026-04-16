@@ -17,6 +17,7 @@
         <a href="#about">О курсе</a>
         <a href="#quickstart">Быстрый старт</a>
         <a href="#release">Релизы</a>
+        <a href="#tests">Тесты</a>
         <a href="#links">Ссылки</a>
         <a href="./lesson1.html">Lesson 1</a>
       </nav>
@@ -70,6 +71,22 @@ curl http://127.0.0.1:8000/health</code></pre>
 
         <h3>Какой образ сейчас раскатан</h3>
         <pre><code>kubectl get deploy player-api -o=jsonpath='{.spec.template.spec.containers[*].image}{"\n"}'</code></pre>
+      </section>
+
+      <section id="tests" class="card">
+        <h2>Тесты</h2>
+
+        <h3>Локальные acceptance tests (in-memory)</h3>
+        <pre><code>source .venv/bin/activate
+pip install -r requirements-dev.txt
+pytest -q</code></pre>
+
+        <h3>E2E тесты против кластера (через port-forward)</h3>
+        <pre><code>kubectl config use-context kind-kind
+kubectl port-forward svc/player-api 8000:80</code></pre>
+        <pre><code>source .venv/bin/activate
+pip install -r requirements-dev.txt
+BASE_URL="http://localhost:8000" BOOTSTRAP_ADMIN_KEY="&lt;key&gt;" pytest -q -m e2e</code></pre>
       </section>
 
       <section id="links" class="card">

@@ -20,6 +20,7 @@
         <a href="#kind">kind</a>
         <a href="#deploy">Деплой</a>
         <a href="#auth">Auth</a>
+        <a href="#tests">Тесты</a>
         <a href="#debug">Диагностика</a>
       </nav>
     </header>
@@ -208,6 +209,20 @@ kubectl rollout status deployment/player-api</code></pre>
         <pre><code># TOKEN=&lt;access_token из /auth/token&gt;
 curl http://127.0.0.1:8000/players \
   -H "Authorization: Bearer $TOKEN"</code></pre>
+      </section>
+
+      <section id="tests" class="card">
+        <h2>Тесты (acceptance / E2E)</h2>
+
+        <h3>Локальные acceptance tests</h3>
+        <pre><code>source .venv/bin/activate
+pip install -r requirements-dev.txt
+pytest -q</code></pre>
+
+        <h3>E2E против кластера</h3>
+        <pre><code>kubectl config use-context kind-kind
+kubectl port-forward svc/player-api 8000:80</code></pre>
+        <pre><code>BASE_URL="http://localhost:8000" BOOTSTRAP_ADMIN_KEY="&lt;key&gt;" pytest -q -m e2e</code></pre>
       </section>
 
       <section id="debug" class="card">
