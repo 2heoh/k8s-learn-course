@@ -242,5 +242,173 @@ curl -i http://127.0.0.1/players -H "Authorization: Bearer $TOKEN"
   - `/players` → 401/403 без токена (ответ сформирован Ingress)
   - `/players` → 200 с токеном
 
+## Урок 1.4
+
+### Тема: Admission Controllers (mutating / validating)
+
+Цель: понять, как Kubernetes **перехватывает запросы к API** *до сохранения объекта в etcd* и может:
+
+- **мутировать** объект (изменить JSON/YAML запроса);
+- **валидировать** объект (разрешить/запретить создание/обновление).
+
+Практически это чаще всего выглядит как **Dynamic Admission Control**: `MutatingWebhookConfiguration` / `ValidatingWebhookConfiguration`, которые вызывают HTTPS‑endpoint (webhook‑сервер) внутри кластера.
+
+### Зачем это нужно (мотивация и use case)
+
+Уроки **1.1–1.3** про то, как **фильтровать HTTP‑трафик** к приложению (JWT, роли, Ingress auth). **Admission** — про другое: как **фильтровать/нормализовать объекты Kubernetes** на границе API (манифесты из `kubectl`, Helm, CI, GitOps).
+
+Типовая боль без admission: “плохой” объект часто **успевает сохраниться**, после чего его ловят уже **поздними** механизмами (ошибки в Pod’ах, security‑сканирование образов постфактум, ручные разборы). Admission позволяет сделать **ранний guardrail**: *не пускать* нарушения и/или *автоматически поправить* запрос до того, как он станет “истиной” кластера.
+
+Практические сценарии (очень коротко):
+
+- **Безопасность/комплаенс**: запретить `privileged`, hostPath, “опасные” capabilities, неизвестные registry, mutable теги вроде `:latest`.
+- **Стандарты платформы**: всегда добавить label/annotation (команда/кост‑центр), выставить дефолты (resources, `imagePullPolicy`), включить обязательные sidecars.
+- **Согласованность GitOps/CI**: одинаковые правила для человека и для пайплайна (всё равно идёт через apiserver).
+
+Как это стыкуется с уроком **1.3**: Ingress может отрезать HTTP‑запросы, но **не заменяет** политики на уровне API (например, кто‑то всё равно может попытаться создать “плохой” `Pod` напрямую). Admission — слой **cluster‑policy** вокруг Kubernetes API.
+
+Ниже — “сквозная” схема потока запроса (упрощённо):
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor U as kubectl / CI / GitOps
+  participant A as kube-apiserver
+  participant M as Mutating admission (webhooks)
+  participant V as Validating admission (webhooks)
+  participant E as etcd
+
+  U->>A: CREATE/UPDATE объект (JSON)
+  A->>M: AdmissionReview (mutate)
+  M-->>A: patch / no-op
+  A->>V: AdmissionReview (validate)
+  alt нарушена политика
+    V-->>A: deny
+    A-->>U: ошибка (webhook denied)
+  else политика ок
+    V-->>A: allow
+    A->>E: сохранить объект
+    A-->>U: объект создан/обновлён
+  end
+```
+
+> Подсказка: диаграммы Mermaid обычно нормально рендерятся на GitHub. Если смотришь `LESSONS.md` в редакторе без Mermaid‑превью — это всё равно валидный текст, а картинки есть на странице [Lesson 1 — Admission](./docs/lesson1.html#admission).
+
+### Задание (практика)
+
+Сделай “сквозной” пример на kind:
+
+- Установи **Kyverno** (это policy‑engine поверх admission webhooks; для учебного сценария удобнее, чем писать свой webhook с нуля).
+- Включи **две политики**:
+  - **mutating**: автоматически добавить label (например `foo=bar`) к `ConfigMap` (и/или другим объектам).
+  - **validating**: запретить образы с тегом `:latest` на уровне `Pod` (в т.ч. для `Deployment`/`Job`, потому что они создают `Pod`).
+
+> Альтернатива “с нуля”: написать свой admission webhook (Deployment + Service + TLS + `*WebhookConfiguration`). Это отличное углубление, но обычно отдельная большая тема.
+
+### Пошагово (рекомендуемый путь через Kyverno)
+
+#### 1) Убедись, что контекст кластера — kind
+
+```bash
+kubectl config current-context
+kubectl get ns
+```
+
+#### 2) Установить Kyverno
+
+Используй **тегированный** релиз (не `main`), например:
+
+```bash
+kubectl create namespace kyverno || true
+
+# Вариант A (как в документации Kyverno): kubectl create -f ...
+kubectl apply -f https://github.com/kyverno/kyverno/releases/download/v1.17.1/install.yaml
+
+kubectl -n kyverno wait --for=condition=available deployment/kyverno-admission-controller --timeout=300s
+kubectl -n kyverno get pods
+```
+
+Проверка, что webhooks реально зарегистрированы:
+
+```bash
+kubectl get mutatingwebhookconfiguration,validatingwebhookconfiguration | grep -i kyverno || true
+```
+
+#### 3) Применить mutate‑policy (добавить label)
+
+Возьми готовый пример из policy library Kyverno:
+
+- `https://raw.githubusercontent.com/kyverno/policies/main/other/add-labels/add-labels.yaml`
+
+```bash
+kubectl apply -f https://raw.githubusercontent.com/kyverno/policies/main/other/add-labels/add-labels.yaml
+kubectl get clusterpolicy add-labels
+```
+
+#### 4) Применить validate‑policy (запрет `:latest`) и включить enforce
+
+Возьми готовый пример:
+
+- `https://raw.githubusercontent.com/kyverno/policies/main/best-practices/disallow-latest-tag/disallow-latest-tag.yaml`
+
+```bash
+kubectl apply -f https://raw.githubusercontent.com/kyverno/policies/main/best-practices/disallow-latest-tag/disallow-latest-tag.yaml
+
+# По умолчанию в этом примере часто стоит Audit — для учебной “жёсткой” проверки включи Enforce:
+kubectl patch clusterpolicy disallow-latest-tag --type merge -p '{"spec":{"validationFailureAction":"Enforce"}}'
+
+kubectl get clusterpolicy disallow-latest-tag
+```
+
+### Проверка результата (kubectl)
+
+#### Mutating: объект реально изменяется admission’ом
+
+Проверка без создания объекта (server dry-run):
+
+```bash
+kubectl create configmap kyverno-mutate-demo \
+  --from-literal=k=v \
+  --dry-run=server -o yaml | grep -F "foo: bar"
+```
+
+Ожидаемо: строка `foo: bar` присутствует (её добавил mutating webhook).
+
+#### Validating: запрос отклоняется на API
+
+```bash
+# Должно упасть (запрещён :latest)
+kubectl create deployment kyverno-validate-demo \
+  --image=nginx:latest \
+  --dry-run=server
+```
+
+```bash
+# Должно пройти (конкретный тег без :latest)
+kubectl create deployment kyverno-validate-demo-ok \
+  --image=docker.io/library/nginx:1.27.0 \
+  --dry-run=server
+```
+
+### Минимальные требования
+
+- В кластере установлен Kyverno, видны webhook‑конфигурации.
+- Есть **работающая** mutating‑политика (по факту — изменение манифеста на admission).
+- Есть **работающая** validating‑политика в режиме **Enforce** (отказ `kubectl ... --dry-run=server` для `:latest`).
+
+### Что должно получиться (критерии готовности)
+
+- Ты можешь объяснить разницу:
+  - **mutating** срабатывает раньше и может **изменить** запрос;
+  - **validating** принимает решение **да/нет** (обычно уже после мутаций).
+- Ты умеешь быстро диагностировать проблемы admission:
+  - `kubectl get validatingwebhookconfiguration,mutatingwebhookconfiguration`
+  - `kubectl -n kyverno logs deploy/kyverno-admission-controller`
+  - при ошибках создания ресурса: `kubectl describe <resource>` (в Events часто видно `denied`/`failed calling webhook`).
+
+### Полезные ссылки
+
+- Kyverno installation (YAML): `https://kyverno.io/docs/installation/installation/`
+- Policy library: `https://kyverno.io/policies/`
 
 

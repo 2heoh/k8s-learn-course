@@ -21,6 +21,7 @@
         <a href="#deploy">Деплой</a>
         <a href="#auth">Auth</a>
         <a href="#ingress-auth">Ingress auth</a>
+        <a href="#admission">Admission</a>
         <a href="#tests">Тесты</a>
         <a href="#debug">Диагностика</a>
       </nav>
@@ -347,6 +348,183 @@ curl -i http://localhost/players
 
 # /players с токеном (должно дойти до сервиса)
 curl -i http://localhost/players -H "Authorization: Bearer $TOKEN"</code></pre>
+      </section>
+
+      <section id="admission" class="card">
+        <h2>Урок 1.4: Admission Controllers (mutating / validating)</h2>
+        <p>
+          Идея: Kubernetes может перехватывать запросы к API <strong>до записи объекта в etcd</strong>
+          и либо <strong>изменить</strong> объект (mutating), либо <strong>разрешить/запретить</strong>
+          операцию (validating). На практике это чаще всего реализовано как
+          <code>MutatingWebhookConfiguration</code> / <code>ValidatingWebhookConfiguration</code>.
+        </p>
+        <p class="hint">
+          В этом уроке мы используем <strong>Kyverno</strong> как “готовый” admission webhook‑стек:
+          проще, чем с нуля поднимать TLS, Service и собственный webhook‑сервер.
+        </p>
+
+        <h3>Зачем это нужно (мотивация)</h3>
+        <p>
+          В уроках <strong>1.1–1.3</strong> мы учились защищать <strong>HTTP‑вход</strong> в сервис (JWT, роли, Ingress auth).
+          Admission — про другую границу: <strong>Kubernetes API</strong>. Сюда приходят не только “внешние” запросы через Ingress,
+          но и <code>kubectl apply</code>, Helm, CI и контроллеры GitOps — и все они в итоге создают/меняют объекты через apiserver.
+        </p>
+        <p>
+          <strong>Use case</strong>: заранее (до записи в etcd) <strong>нормализовать</strong> манифесты и/или <strong>запретить</strong> опасные/неприемлемые для платформы конфигурации.
+          Это снижает класс ошибок “сначала выкатили, потом ловим в рантайме”, и помогает держать кластер предсказуемым для многих команд.
+        </p>
+        <p class="hint">
+          Типовые примеры: запрет <code>:latest</code>, обязательные labels для учёта/костов, дефолтные лимиты ресурсов, запрет привилегированных контейнеров,
+          единообразные политики для CI и для людей (потому что оба пути проходят через один и тот же API).
+        </p>
+
+        <h3>Схемы: “без admission” vs “с admission webhooks”</h3>
+        <div class="diagram-pair">
+          <figure class="diagram-figure">
+            <figcaption>Без политики на API: “плохой” объект может сохраниться</figcaption>
+            <div class="diagram-svg-wrap" aria-hidden="true">
+              <svg viewBox="0 0 560 228" xmlns="http://www.w3.org/2000/svg" role="img" preserveAspectRatio="xMidYMid meet">
+                <defs>
+                  <marker id="adm-arr-a" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+                    <path d="M0,0 L8,4 L0,8 Z" fill="#7aa2ff" />
+                  </marker>
+                </defs>
+                <rect x="0" y="0" width="560" height="228" fill="none" />
+                <rect x="20" y="58" width="112" height="64" rx="10" fill="#161f33" stroke="rgba(255,255,255,0.18)" />
+                <text x="76" y="88" text-anchor="middle" fill="#e6edf7" font-size="14" font-family="ui-sans-serif,system-ui,sans-serif">Клиент</text>
+                <text x="76" y="108" text-anchor="middle" fill="#a9b5cc" font-size="11" font-family="ui-sans-serif,system-ui,sans-serif">kubectl / CI</text>
+                <line x1="132" y1="90" x2="196" y2="90" stroke="#7aa2ff" stroke-width="2" marker-end="url(#adm-arr-a)" />
+                <rect x="196" y="42" width="168" height="96" rx="10" fill="#161f33" stroke="rgba(255,255,255,0.18)" />
+                <text x="280" y="74" text-anchor="middle" fill="#e6edf7" font-size="14" font-family="ui-sans-serif,system-ui,sans-serif">kube-apiserver</text>
+                <text x="280" y="96" text-anchor="middle" fill="#a9b5cc" font-size="11" font-family="ui-sans-serif,system-ui,sans-serif">принять запрос</text>
+                <text x="280" y="116" text-anchor="middle" fill="#a9b5cc" font-size="11" font-family="ui-sans-serif,system-ui,sans-serif">(RBAC / схема)</text>
+                <line x1="364" y1="90" x2="428" y2="90" stroke="#7aa2ff" stroke-width="2" marker-end="url(#adm-arr-a)" />
+                <rect x="428" y="50" width="100" height="80" rx="10" fill="#161f33" stroke="rgba(255,255,255,0.18)" />
+                <text x="478" y="82" text-anchor="middle" fill="#e6edf7" font-size="14" font-family="ui-sans-serif,system-ui,sans-serif">etcd</text>
+                <text x="478" y="104" text-anchor="middle" fill="#a9b5cc" font-size="11" font-family="ui-sans-serif,system-ui,sans-serif">persist</text>
+                <rect x="20" y="142" width="520" height="72" rx="10" fill="rgba(255,122,122,0.10)" stroke="rgba(255,122,122,0.35)" />
+                <text x="280" y="162" text-anchor="middle" fill="#ffd6d6" font-size="11" font-family="ui-sans-serif,system-ui,sans-serif">
+                  <tspan x="280" dy="0">Политика платформы не сработает без admission</tspan>
+                  <tspan x="280" dy="14">(политика должна жить “на API”, а не только в голове).</tspan>
+                </text>
+                <text x="280" y="190" text-anchor="middle" fill="#a9b5cc" font-size="11" font-family="ui-sans-serif,system-ui,sans-serif">
+                  <tspan x="280" dy="0">Иначе ошибка проявится позже:</tspan>
+                  <tspan x="280" dy="14">Pod / рантайм / ручной разбор.</tspan>
+                </text>
+              </svg>
+            </div>
+          </figure>
+
+          <figure class="diagram-figure">
+            <figcaption>С admission: mutate → validate → persist (или deny)</figcaption>
+            <div class="diagram-svg-wrap" aria-hidden="true">
+              <svg viewBox="0 0 560 330" xmlns="http://www.w3.org/2000/svg" role="img" preserveAspectRatio="xMidYMid meet">
+                <defs>
+                  <marker id="adm-arr-b" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+                    <path d="M0,0 L8,4 L0,8 Z" fill="#7aa2ff" />
+                  </marker>
+                  <marker id="adm-arr-c" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+                    <path d="M0,0 L8,4 L0,8 Z" fill="#7affc7" />
+                  </marker>
+                  <marker id="adm-arr-d" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+                    <path d="M0,0 L8,4 L0,8 Z" fill="#ff9aa8" />
+                  </marker>
+                </defs>
+                <rect x="0" y="0" width="560" height="330" fill="none" />
+                <rect x="20" y="28" width="100" height="52" rx="10" fill="#161f33" stroke="rgba(255,255,255,0.18)" />
+                <text x="70" y="52" text-anchor="middle" fill="#e6edf7" font-size="14" font-family="ui-sans-serif,system-ui,sans-serif">Клиент</text>
+                <text x="70" y="70" text-anchor="middle" fill="#a9b5cc" font-size="11" font-family="ui-sans-serif,system-ui,sans-serif">kubectl / CI</text>
+                <line x1="120" y1="54" x2="178" y2="54" stroke="#7aa2ff" stroke-width="2" marker-end="url(#adm-arr-b)" />
+                <rect x="186" y="14" width="180" height="78" rx="10" fill="#161f33" stroke="rgba(255,255,255,0.18)" />
+                <text x="276" y="42" text-anchor="middle" fill="#e6edf7" font-size="14" font-family="ui-sans-serif,system-ui,sans-serif">kube-apiserver</text>
+                <text x="276" y="64" text-anchor="middle" fill="#a9b5cc" font-size="11" font-family="ui-sans-serif,system-ui,sans-serif">admission chain</text>
+                <path d="M 276 92 L 276 118" stroke="#7affc7" stroke-width="2" marker-end="url(#adm-arr-c)" />
+                <text x="292" y="112" fill="#7affc7" font-size="11" font-family="ui-sans-serif,system-ui,sans-serif">mutate</text>
+                <rect x="186" y="124" width="180" height="56" rx="10" fill="#161f33" stroke="rgba(122,255,199,0.35)" />
+                <text x="276" y="148" text-anchor="middle" fill="#e6edf7" font-size="13" font-family="ui-sans-serif,system-ui,sans-serif">Mutating webhooks</text>
+                <text x="276" y="168" text-anchor="middle" fill="#a9b5cc" font-size="11" font-family="ui-sans-serif,system-ui,sans-serif">patch / inject / defaults</text>
+                <path d="M 276 180 L 276 206" stroke="#7affc7" stroke-width="2" marker-end="url(#adm-arr-c)" />
+                <text x="292" y="200" fill="#7affc7" font-size="11" font-family="ui-sans-serif,system-ui,sans-serif">validate</text>
+                <rect x="186" y="210" width="180" height="52" rx="10" fill="#161f33" stroke="rgba(122,255,199,0.35)" />
+                <text x="276" y="232" text-anchor="middle" fill="#e6edf7" font-size="13" font-family="ui-sans-serif,system-ui,sans-serif">Validating webhooks</text>
+                <text x="276" y="250" text-anchor="middle" fill="#a9b5cc" font-size="11" font-family="ui-sans-serif,system-ui,sans-serif">allow / deny</text>
+                <!-- allow → etcd (вниз: persist) -->
+                <line x1="276" y1="262" x2="276" y2="272" stroke="#7aa2ff" stroke-width="2" marker-end="url(#adm-arr-b)" />
+                <text x="218" y="258" fill="#a9b5cc" font-size="11" font-family="ui-sans-serif,system-ui,sans-serif">allow</text>
+                <rect x="196" y="272" width="160" height="58" rx="10" fill="#161f33" stroke="rgba(255,255,255,0.18)" />
+                <text x="276" y="300" text-anchor="middle" fill="#e6edf7" font-size="14" font-family="ui-sans-serif,system-ui,sans-serif">etcd</text>
+                <text x="276" y="318" text-anchor="middle" fill="#a9b5cc" font-size="11" font-family="ui-sans-serif,system-ui,sans-serif">persist</text>
+                <!-- deny → вбок: ошибка клиенту -->
+                <line x1="366" y1="236" x2="384" y2="236" stroke="#ff9aa8" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#adm-arr-d)" />
+                <text x="368" y="228" fill="#ffd6d6" font-size="11" font-family="ui-sans-serif,system-ui,sans-serif">deny</text>
+                <rect x="384" y="208" width="156" height="56" rx="10" fill="rgba(122,162,255,0.10)" stroke="rgba(122,162,255,0.30)" />
+                <text x="462" y="232" text-anchor="middle" fill="#d8e3ff" font-size="12" font-family="ui-sans-serif,system-ui,sans-serif">deny</text>
+                <text x="462" y="252" text-anchor="middle" fill="#a9b5cc" font-size="11" font-family="ui-sans-serif,system-ui,sans-serif">ошибка клиенту</text>
+              </svg>
+            </div>
+          </figure>
+        </div>
+        <p class="hint">
+          Важно про порядок: на запрос сначала накладываются <strong>mutating</strong> изменения (патчи/инъекции),
+          затем <strong>validating</strong> проверяет уже “почти финальный” объект. Поэтому валидация обычно отвечает на вопрос
+          “можно ли сохранить то, что получилось после мутаций?”.
+        </p>
+
+        <h3>Задание</h3>
+        <ul>
+          <li>Установить Kyverno в kind.</li>
+          <li>Сделать <strong>mutating</strong> политику (добавить label).</li>
+          <li>Сделать <strong>validating</strong> политику (запретить <code>:latest</code>).</li>
+        </ul>
+
+        <h3>Установка Kyverno</h3>
+        <pre><code>kubectl create namespace kyverno || true
+kubectl apply -f https://github.com/kyverno/kyverno/releases/download/v1.17.1/install.yaml
+
+kubectl -n kyverno wait --for=condition=available deployment/kyverno-admission-controller --timeout=300s
+kubectl -n kyverno get pods
+
+kubectl get mutatingwebhookconfiguration,validatingwebhookconfiguration | grep -i kyverno || true</code></pre>
+
+        <h3>Mutate: добавить label</h3>
+        <pre><code>kubectl apply -f https://raw.githubusercontent.com/kyverno/policies/main/other/add-labels/add-labels.yaml
+kubectl get clusterpolicy add-labels</code></pre>
+
+        <h3>Validate: запретить :latest (и включить Enforce)</h3>
+        <pre><code>kubectl apply -f https://raw.githubusercontent.com/kyverno/policies/main/best-practices/disallow-latest-tag/disallow-latest-tag.yaml
+kubectl patch clusterpolicy disallow-latest-tag --type merge -p '{"spec":{"validationFailureAction":"Enforce"}}'
+kubectl get clusterpolicy disallow-latest-tag</code></pre>
+
+        <h3>Проверка</h3>
+        <pre><code># mutating: label появляется даже на server dry-run
+kubectl create configmap kyverno-mutate-demo \
+  --from-literal=k=v \
+  --dry-run=server -o yaml | grep -F "foo: bar"
+
+# validating: :latest должен быть отклонён API
+kubectl create deployment kyverno-validate-demo --image=nginx:latest --dry-run=server
+
+# validating: конкретный тег — ок
+kubectl create deployment kyverno-validate-demo-ok --image=docker.io/library/nginx:1.27.0 --dry-run=server</code></pre>
+
+        <h3>Критерии готовности</h3>
+        <ul>
+          <li>Видны webhook‑конфигурации Kyverno.</li>
+          <li>Mutate реально меняет манифест (проверка через <code>--dry-run=server</code>).</li>
+          <li>Validate в режиме <code>Enforce</code> отклоняет <code>:latest</code>.</li>
+        </ul>
+
+        <h3>Ссылки</h3>
+        <ul>
+          <li>
+            Установка:
+            <a href="https://kyverno.io/docs/installation/installation/">https://kyverno.io/docs/installation/installation/</a>
+          </li>
+          <li>
+            Policy library:
+            <a href="https://kyverno.io/policies/">https://kyverno.io/policies/</a>
+          </li>
+        </ul>
       </section>
 
       <section id="tests" class="card">
