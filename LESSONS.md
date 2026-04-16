@@ -142,6 +142,91 @@ kubectl rollout status deployment/player-api
   - **вариант A (минимальный)**: `nginx.ingress.kubernetes.io/auth-url` + отдельный эндпоинт проверки токена
   - **вариант B (расширенный)**: oauth2-proxy + OIDC (например GitHub/Google/Keycloak)
 
+### Как сделать вариант A (минимальный) — пошагово
+
+#### 1) Создать kind-кластер с пробросом портов 80/443
+
+> Если у тебя уже есть кластер kind без проброса портов — проще пересоздать его для этого урока.
+
+```bash
+kind delete cluster --name kind || true
+kind create cluster --name kind --config k8s/kind-config-ingress.yaml
+kubectl config use-context kind-kind
+kubectl get nodes
+```
+
+#### 2) Установить NGINX Ingress Controller (ingress-nginx)
+
+```bash
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.11.1/deploy/static/provider/kind/deploy.yaml
+
+kubectl -n ingress-nginx wait --for=condition=ready pod \
+  -l app.kubernetes.io/component=controller \
+  --timeout=180s
+```
+
+Проверка, что Ingress Controller поднялся:
+
+```bash
+kubectl -n ingress-nginx get pods
+kubectl get ingressclass
+```
+
+Если используешь аннотации вида `nginx.ingress.kubernetes.io/auth-snippet` (как в `k8s/ingress.yaml`), включи snippet-аннотации (в kind для урока ок):
+
+```bash
+kubectl -n ingress-nginx patch configmap ingress-nginx-controller --type merge \
+  -p '{"data":{"allow-snippet-annotations":"true"}}'
+kubectl -n ingress-nginx rollout restart deployment/ingress-nginx-controller
+kubectl -n ingress-nginx rollout status deployment/ingress-nginx-controller --timeout=180s
+```
+
+#### 3) Задеплоить сервис и Ingress
+
+```bash
+# (если нужно) собрать образ и загрузить в kind
+export TAG="v1.1.0"
+docker build -t player-api:$TAG .
+kind load docker-image player-api:$TAG --name kind
+
+kubectl apply -f k8s/deployment.yaml -f k8s/service.yaml -f k8s/ingress.yaml
+kubectl rollout status deployment/player-api
+kubectl get ingress
+```
+
+#### 4) Проверить, что auth “режется” на Ingress
+
+`/health` должен быть доступен без токена:
+
+```bash
+curl -i http://127.0.0.1/health
+```
+
+Создаём пользователя и берём токен через Ingress (путь публичный):
+
+```bash
+curl -i -X POST http://127.0.0.1/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"username":"player1","email":"player1@example.com","password":"verysecret123"}'
+
+TOKEN="$(curl -s -X POST http://127.0.0.1/auth/token \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "username=player1&password=verysecret123" | python3 -c 'import sys, json; print(json.load(sys.stdin)["access_token"])')"
+echo "$TOKEN"
+```
+
+Без токена `/players` должен вернуть **401/403** (ответ сформирован Ingress-ом):
+
+```bash
+curl -i http://127.0.0.1/players
+```
+
+С токеном — запрос проходит в приложение:
+
+```bash
+curl -i http://127.0.0.1/players -H "Authorization: Bearer $TOKEN"
+```
+
 ### Минимальные требования
 
 - `GET /health` доступен без авторизации.

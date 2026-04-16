@@ -1,0 +1,52 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: player-api-public
+  annotations:
+    # Публичные пути: /health и /auth/*
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+spec:
+  ingressClassName: nginx
+  rules:
+    - http:
+        paths:
+          - path: /health
+            pathType: Exact
+            backend:
+              service:
+                name: player-api
+                port:
+                  number: 80
+          - path: /auth
+            pathType: Prefix
+            backend:
+              service:
+                name: player-api
+                port:
+                  number: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: player-api-protected
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    # Включаем внешнюю проверку для всех /players* запросов.
+    nginx.ingress.kubernetes.io/auth-url: "http://player-api.default.svc.cluster.local/auth/ingress-check"
+    # Важно: прокидываем исходный Authorization в subrequest (на auth-url).
+    nginx.ingress.kubernetes.io/auth-snippet: |
+      proxy_set_header Authorization $http_authorization;
+    # Для удобства отладки: вернуть заголовки из auth-check.
+    nginx.ingress.kubernetes.io/auth-response-headers: "X-Auth-User,X-Auth-Role"
+spec:
+  ingressClassName: nginx
+  rules:
+    - http:
+        paths:
+          - path: /players
+            pathType: Prefix
+            backend:
+              service:
+                name: player-api
+                port:
+                  number: 80

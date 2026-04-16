@@ -130,6 +130,47 @@ p {
   }
 }
 
+.diagram-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin: 16px 0;
+  align-items: stretch;
+}
+
+@media (max-width: 860px) {
+  .diagram-pair {
+    grid-template-columns: 1fr;
+  }
+}
+
+.diagram-figure {
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.22);
+  overflow: hidden;
+}
+
+.diagram-figure figcaption {
+  padding: 10px 12px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #d8e3ff;
+  border-bottom: 1px solid var(--border);
+  background: rgba(17, 26, 43, 0.65);
+}
+
+.diagram-figure .diagram-svg-wrap {
+  padding: 10px 8px 12px;
+}
+
+.diagram-figure svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
 code {
   font-family: var(--mono);
   font-size: 0.95em;

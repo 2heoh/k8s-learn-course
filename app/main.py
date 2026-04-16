@@ -144,6 +144,19 @@ def login_for_access_token(
     return Token(access_token=token)
 
 
+@app.get(
+    "/auth/ingress-check",
+    tags=["Auth"],
+    summary="Проверка Bearer-токена для Ingress",
+)
+def ingress_check(current: Player = Depends(get_current_player)) -> Response:
+    # NGINX Ingress ожидает 2xx, чтобы пропустить запрос дальше.
+    resp = Response(status_code=status.HTTP_200_OK)
+    resp.headers["X-Auth-User"] = current.username
+    resp.headers["X-Auth-Role"] = current.role
+    return resp
+
+
 @app.get("/players", response_model=List[PlayerRead], tags=["Players"])
 def list_players(
     skip: int = Query(0, ge=0),
