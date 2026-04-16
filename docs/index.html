@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Урок 1 — справка по Kubernetes</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <header class="container">
+      <div class="badge">Lesson 1</div>
+      <h1>Kubernetes (k8s): базовые сущности и инструменты</h1>
+      <p class="subtitle">
+        Короткая справка для запуска нашего FastAPI-сервиса в kind.
+      </p>
+      <nav class="nav">
+        <a href="#entities">Сущности</a>
+        <a href="#kubectl">kubectl</a>
+        <a href="#kind">kind</a>
+        <a href="#deploy">Деплой сервиса</a>
+        <a href="#debug">Диагностика</a>
+      </nav>
+    </header>
+
+    <main class="container">
+      <section id="entities" class="card">
+        <h2>Сущности Kubernetes (что это такое)</h2>
+
+        <div class="grid">
+          <div>
+            <h3>Pod</h3>
+            <p>
+              Минимальная единица запуска. Обычно содержит 1 контейнер (но может
+              быть несколько). У Pod есть IP внутри кластера, но он
+              <strong>эфемерен</strong> — может пересоздаваться.
+            </p>
+          </div>
+          <div>
+            <h3>Deployment</h3>
+            <p>
+              Описывает желаемое состояние для приложения: образ, количество
+              реплик, стратегия обновления. Под капотом управляет ReplicaSet.
+            </p>
+          </div>
+          <div>
+            <h3>ReplicaSet</h3>
+            <p>
+              Следит, чтобы было нужное число Pod. Обычно создаётся автоматически
+              Deployment’ом.
+            </p>
+          </div>
+          <div>
+            <h3>Service</h3>
+            <p>
+              Стабильная “точка входа” для Pod по label-selector. Дает постоянный
+              DNS/Virtual IP и балансировку между репликами.
+            </p>
+            <ul>
+              <li><strong>ClusterIP</strong>: доступ внутри кластера</li>
+              <li><strong>NodePort</strong>: порт на нодах (удобно локально)</li>
+              <li><strong>LoadBalancer</strong>: внешний балансер (в облаке)</li>
+            </ul>
+          </div>
+          <div>
+            <h3>Ingress</h3>
+            <p>
+              Правила L7‑маршрутизации (HTTP/HTTPS) в кластер. Требует Ingress
+              Controller (например, nginx-ingress).
+            </p>
+          </div>
+          <div>
+            <h3>Namespace</h3>
+            <p>
+              Логическая изоляция ресурсов. Удобно разделять окружения/проекты.
+            </p>
+          </div>
+          <div>
+            <h3>ConfigMap / Secret</h3>
+            <p>
+              Хранение конфигурации и секретов отдельно от образа. Можно
+              подключать как env‑переменные или как файлы в volume.
+            </p>
+          </div>
+          <div>
+            <h3>Volumes</h3>
+            <p>
+              Диски/тома, которые монтируются в контейнер. В нашем манифесте
+              используется <code>emptyDir</code> (временное хранилище на время
+              жизни Pod).
+            </p>
+          </div>
+          <div>
+            <h3>Probes</h3>
+            <p>
+              Проверки здоровья:
+              <strong>readinessProbe</strong> (готов ли принимать трафик) и
+              <strong>livenessProbe</strong> (жив ли, нужно ли перезапустить).
+              У нас — HTTP вызов <code>/health</code>.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section id="kubectl" class="card">
+        <h2>kubectl: базовые команды</h2>
+
+        <p class="hint">
+          Почти всё в k8s — это YAML‑манифест + <code>kubectl apply</code>.
+          Смотри состояние через <code>get</code>/<code>describe</code> и логи
+          через <code>logs</code>.
+        </p>
+
+        <h3>Применить/удалить</h3>
+        <pre><code>kubectl apply -f k8s/
+kubectl delete -f k8s/</code></pre>
+
+        <h3>Посмотреть состояние</h3>
+        <pre><code>kubectl get pods
+kubectl get deploy
+kubectl get svc
+kubectl get events --sort-by=.metadata.creationTimestamp</code></pre>
+
+        <h3>Диагностика</h3>
+        <pre><code>kubectl describe pod &lt;pod-name&gt;
+kubectl logs -f &lt;pod-name&gt;
+kubectl logs -f deploy/player-api
+kubectl exec -it &lt;pod-name&gt; -- sh</code></pre>
+
+        <h3>Проброс порта (доступ с локальной машины)</h3>
+        <pre><code>kubectl port-forward svc/player-api 8000:80
+curl http://127.0.0.1:8000/health</code></pre>
+      </section>
+
+      <section id="kind" class="card">
+        <h2>kind: локальный Kubernetes</h2>
+        <p>
+          kind (Kubernetes IN Docker) поднимает кластер k8s в Docker-контейнерах.
+          Удобно для обучения/локальной разработки.
+        </p>
+
+        <h3>Создание и проверка</h3>
+        <pre><code>kind create cluster --name kind
+kind get clusters
+kubectl cluster-info</code></pre>
+
+        <h3>Локальные Docker-образы и kind</h3>
+        <p class="hint">
+          В kind ноды — это отдельный Docker‑контекст. Поэтому образ, собранный
+          локально, нужно “загрузить” в кластер.
+        </p>
+        <pre><code>docker build -t player-api:latest .
+kind load docker-image player-api:latest --name kind</code></pre>
+      </section>
+
+      <section id="deploy" class="card">
+        <h2>Деплой нашего сервиса (Player API)</h2>
+        <p>
+          В репозитории уже есть манифесты: <code>k8s/deployment.yaml</code> и
+          <code>k8s/service.yaml</code>.
+        </p>
+
+        <h3>Шаги</h3>
+        <ol>
+          <li>Собрать образ <code>player-api:latest</code>.</li>
+          <li>Загрузить образ в kind.</li>
+          <li>Применить манифесты.</li>
+          <li>Пробросить порт и проверить <code>/health</code>.</li>
+        </ol>
+
+        <pre><code># 1) build
+docker build -t player-api:latest .
+
+# 2) load into kind
+kind load docker-image player-api:latest --name kind
+
+# 3) apply
+kubectl apply -f k8s/deployment.yaml
+kubectl apply -f k8s/service.yaml
+
+# 4) test
+kubectl port-forward svc/player-api 8000:80
+curl http://127.0.0.1:8000/health</code></pre>
+      </section>
+
+      <section id="debug" class="card">
+        <h2>Если не запускается: чек-лист</h2>
+
+        <h3>Образ не подтягивается</h3>
+        <ul>
+          <li>
+            Убедись, что сделал <code>kind load docker-image ...</code> (или
+            используешь registry).
+          </li>
+          <li>
+            Посмотри: <code>kubectl describe pod ...</code> → события
+            <code>ImagePullBackOff</code>/<code>ErrImagePull</code>.
+          </li>
+        </ul>
+
+        <h3>Поды падают (CrashLoopBackOff)</h3>
+        <ul>
+          <li><code>kubectl logs -f deploy/player-api</code></li>
+          <li><code>kubectl describe pod ...</code> (причина рестартов)</li>
+        </ul>
+
+        <h3>Не проходит readiness/liveness</h3>
+        <ul>
+          <li>
+            Проверь, что <code>/health</code> доступен внутри контейнера и
+            приложение слушает <code>0.0.0.0:8000</code>.
+          </li>
+        </ul>
+
+        <h3>Service не работает</h3>
+        <ul>
+          <li>
+            Проверь selector/labels совпадают: <code>kubectl get pods --show-labels</code>
+          </li>
+          <li>
+            Проверь endpoints сервиса: <code>kubectl get endpoints player-api</code>
+          </li>
+        </ul>
+      </section>
+    </main>
+
+    <footer class="container footer">
+      <div>
+        Файлы урока: <code>k8s/</code>, <code>Dockerfile</code>, <code>README.md</code>
+      </div>
+    </footer>
+  </body>
+</html>
+
