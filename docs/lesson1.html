@@ -20,6 +20,7 @@
         <a href="#kind">kind</a>
         <a href="#deploy">Деплой</a>
         <a href="#auth">Auth</a>
+        <a href="#ingress-auth">Ingress auth</a>
         <a href="#tests">Тесты</a>
         <a href="#debug">Диагностика</a>
       </nav>
@@ -209,6 +210,50 @@ kubectl rollout status deployment/player-api</code></pre>
         <pre><code># TOKEN=&lt;access_token из /auth/token&gt;
 curl http://127.0.0.1:8000/players \
   -H "Authorization: Bearer $TOKEN"</code></pre>
+      </section>
+
+      <section id="ingress-auth" class="card">
+        <h2>Урок 1.3: Auth на уровне Ingress NGINX</h2>
+        <p>
+          Идея: отсеивать неавторизованные запросы <strong>до</strong> приложения,
+          используя NGINX Ingress Controller. Это переносит “проверку входа”
+          (есть ли токен / валиден ли токен) на edge‑уровень.
+        </p>
+        <p class="hint">
+          Authorization “по данным” (например, user может читать только себя) обычно
+          остаётся в сервисе.
+        </p>
+
+        <h3>Минимальные требования</h3>
+        <ul>
+          <li><code>GET /health</code> доступен без авторизации</li>
+          <li><code>/players</code> требует авторизацию на уровне Ingress</li>
+        </ul>
+
+        <h3>Подход A (минимальный): auth-url</h3>
+        <p class="hint">
+          NGINX Ingress умеет проксировать запрос на “auth endpoint” и решать,
+          пропускать ли запрос дальше.
+        </p>
+        <ul>
+          <li><code>nginx.ingress.kubernetes.io/auth-url</code></li>
+          <li><code>nginx.ingress.kubernetes.io/auth-response-headers</code> (опционально)</li>
+        </ul>
+
+        <h3>Подход B (расширенный): oauth2-proxy</h3>
+        <p class="hint">
+          Подходит, если хочешь OIDC/OAuth2 логин и централизованную авторизацию.
+        </p>
+
+        <h3>Проверка</h3>
+        <pre><code># /health без токена
+curl -i http://localhost/health
+
+# /players без токена (ожидаемо 401/403 от Ingress)
+curl -i http://localhost/players
+
+# /players с токеном (должно дойти до сервиса)
+curl -i http://localhost/players -H "Authorization: Bearer $TOKEN"</code></pre>
       </section>
 
       <section id="tests" class="card">

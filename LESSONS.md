@@ -126,5 +126,36 @@ kubectl rollout status deployment/player-api
   - `kubectl port-forward svc/player-api 8000:80`
   - `BASE_URL="http://localhost:8000" BOOTSTRAP_ADMIN_KEY="<key>" pytest -q -m e2e`
 
+## Урок 1.3
+
+### Тема: Authentication/Authorization на Ingress (NGINX Ingress Controller)
+
+Цель: вынести **проверку “входа”** (наличие/валидность токена) на уровень k8s через Ingress NGINX, чтобы неавторизованные запросы отсеивались до приложения.
+
+Важно: “authorization по данным” (например, user может читать только себя) обычно остаётся в сервисе.
+
+### Задание (практика)
+
+- Установить **NGINX Ingress Controller** в kind.
+- Добавить `Ingress` для `player-api`.
+- Настроить проверку авторизации на уровне Ingress:
+  - **вариант A (минимальный)**: `nginx.ingress.kubernetes.io/auth-url` + отдельный эндпоинт проверки токена
+  - **вариант B (расширенный)**: oauth2-proxy + OIDC (например GitHub/Google/Keycloak)
+
+### Минимальные требования
+
+- `GET /health` доступен без авторизации.
+- Все запросы к `/players` требуют авторизации на уровне Ingress:
+  - без `Authorization: Bearer ...` должно возвращаться **401/403** от Ingress
+  - с токеном — запрос проходит до приложения
+
+### Что должно получиться (критерии готовности)
+
+- В кластере есть ресурсы Ingress Controller и `Ingress` для сервиса.
+- Проверка через `curl`:
+  - `/health` → 200 без токена
+  - `/players` → 401/403 без токена (ответ сформирован Ingress)
+  - `/players` → 200 с токеном
+
 
 
